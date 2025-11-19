@@ -1,0 +1,26 @@
+# Environment / secrets
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Local data and databases
+data/
+*.sqlite
+
+# Virtual environments
+venv_hailo_rpi_examples/
+
+# SpecStory history and generated artifacts
+.specstory/
+basic_pipelines/.specstory/
+
+# Logs and temporary runtime files
+*.log
+hailo_temp_resources/
+hailort.log
+hailort.1.log
+pyhailort.log
+
+

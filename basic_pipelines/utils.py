@@ -1,6 +1,8 @@
+import atexit
 import sqlite3
 import threading
 import time
+from queue import Empty, Full, Queue
 
 import numpy as np
 
@@ -32,9 +34,13 @@ class Tracker:
         self.gallery = []
         self.next_id = 1
         self.db_path = db_path
-        self._db_lock = threading.Lock()
+        self._db_queue = None
+        self._db_thread = None
+        self._db_stop = None
+        self._db_queue_dropped = False
         if self.db_path:
             self._init_db()
+            self._start_db_worker()
 
         self.use_ann = bool(use_ann) and (AnnoyIndex is not None)
         if use_ann and AnnoyIndex is None:
@@ -47,6 +53,7 @@ class Tracker:
         self._ann_id_map = {}
         self._ann_dirty = True
         self.db_recall_limit = max(int(db_recall_limit or 0), 0)
+        self._load_state_from_db()
 
     # initialize SQLite schema if persistence is enabled
     def _init_db(self):
@@ -73,6 +80,152 @@ class Tracker:
                 conn.execute("ALTER TABLE reid_entries ADD COLUMN last_seen_ts INTEGER")
                 conn.commit()
 
+    def _load_state_from_db(self):
+        if not self.db_path:
+            return
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                cursor = conn.cursor()
+                max_id_row = cursor.execute("SELECT MAX(id) FROM reid_entries").fetchone()
+                if max_id_row and max_id_row[0] is not None:
+                    self.next_id = max(self.next_id, int(max_id_row[0]) + 1)
+
+                preload_limit = self.db_recall_limit
+                if preload_limit <= 0:
+                    return
+
+                rows = cursor.execute(
+                    """
+                    SELECT id, centroid, last_seen, last_seen_ts, missed_frames,
+                           total_hits, quality, created_at
+                    FROM reid_entries
+                    WHERE centroid IS NOT NULL
+                    ORDER BY last_seen_ts DESC
+                    LIMIT ?
+                    """,
+                    (preload_limit,),
+                ).fetchall()
+        except sqlite3.Error as exc:
+            print(f"[tracker] Warning: failed to load DB state: {exc}")
+            return
+
+        restored = []
+        for (
+            rid,
+            blob,
+            last_seen,
+            last_seen_ts,
+            missed_frames,
+            total_hits,
+            quality,
+            created_at,
+        ) in rows:
+            if missed_frames is not None and missed_frames > self.max_inactive_frames:
+                continue
+            if not blob:
+                continue
+            try:
+                centroid = np.frombuffer(blob, dtype=np.float32).copy()
+            except ValueError:
+                continue
+            centroid = self._normalize(centroid)
+            if centroid is None:
+                continue
+            entry = {
+                "id": rid,
+                "centroid": centroid,
+                "prototypes": [centroid.copy()],
+                "count": total_hits or 0,
+                "last_seen": last_seen or 0,
+                "last_seen_ts": last_seen_ts or created_at or int(time.time()),
+                "bbox": None,
+                "quality": float(quality or 0.0),
+                "missed_frames": missed_frames or 0,
+                "hits": total_hits or 0,
+                "created_at": created_at or int(time.time()),
+            }
+            restored.append(entry)
+
+        if restored:
+            self.gallery.extend(restored)
+            self._ann_dirty = True
+
+    def _start_db_worker(self):
+        if self._db_queue is not None:
+            return
+        self._db_queue = Queue(maxsize=4096)
+        self._db_stop = threading.Event()
+        self._db_thread = threading.Thread(
+            target=self._db_worker,
+            name="TrackerDBWriter",
+            daemon=True,
+        )
+        self._db_thread.start()
+        atexit.register(self._shutdown_db_worker)
+
+    def _shutdown_db_worker(self):
+        if not self._db_queue:
+            return
+        if self._db_stop:
+            self._db_stop.set()
+        try:
+            self._db_queue.put_nowait(("STOP", None))
+        except Full:
+            pass
+        if self._db_thread and self._db_thread.is_alive():
+            self._db_thread.join(timeout=1.0)
+        self._db_queue = None
+
+    def _db_worker(self):
+        if not self.db_path:
+            return
+        upsert_sql = """
+            INSERT INTO reid_entries (id, centroid, last_seen, last_seen_ts, missed_frames, total_hits, quality, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                centroid=excluded.centroid,
+                last_seen=excluded.last_seen,
+                last_seen_ts=excluded.last_seen_ts,
+                missed_frames=excluded.missed_frames,
+                total_hits=excluded.total_hits,
+                quality=excluded.quality
+        """
+        delete_sql = "DELETE FROM reid_entries WHERE id=?"
+        try:
+            with sqlite3.connect(self.db_path) as conn:
+                while True:
+                    if self._db_stop and self._db_stop.is_set() and self._db_queue.empty():
+                        break
+                    try:
+                        op, payload = self._db_queue.get(timeout=0.5)
+                    except Empty:
+                        continue
+                    if op == "STOP":
+                        self._db_queue.task_done()
+                        break
+                    try:
+                        if op == "UPSERT":
+                            conn.execute(upsert_sql, payload)
+                        elif op == "DELETE":
+                            conn.execute(delete_sql, (payload,))
+                        conn.commit()
+                    except sqlite3.Error as exc:
+                        print(f"[tracker] DB worker error: {exc}")
+                    finally:
+                        self._db_queue.task_done()
+        except sqlite3.Error as exc:
+            print(f"[tracker] DB worker aborted: {exc}")
+
+    def _enqueue_db_op(self, op, payload):
+        if not self._db_queue:
+            return
+        try:
+            self._db_queue.put_nowait((op, payload))
+        except Full:
+            if not self._db_queue_dropped:
+                print("[tracker] Warning: DB queue full, dropping writes.")
+                self._db_queue_dropped = True
+
     def _persist_entry(self, entry):
         if not self.db_path:
             return
@@ -86,29 +239,12 @@ class Tracker:
             entry.get("quality", 0.0),
             entry.get("created_at", int(time.time())),
         )
-        with self._db_lock, sqlite3.connect(self.db_path) as conn:
-            conn.execute(
-                """
-                INSERT INTO reid_entries (id, centroid, last_seen, last_seen_ts, missed_frames, total_hits, quality, created_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    centroid=excluded.centroid,
-                    last_seen=excluded.last_seen,
-                    last_seen_ts=excluded.last_seen_ts,
-                    missed_frames=excluded.missed_frames,
-                    total_hits=excluded.total_hits,
-                    quality=excluded.quality
-                """,
-                payload,
-            )
-            conn.commit()
+        self._enqueue_db_op("UPSERT", payload)
 
     def _delete_entry(self, entry_id):
         if not self.db_path:
             return
-        with self._db_lock, sqlite3.connect(self.db_path) as conn:
-            conn.execute("DELETE FROM reid_entries WHERE id=?", (entry_id,))
-            conn.commit()
+        self._enqueue_db_op("DELETE", entry_id)
 
     @staticmethod
     def _normalize(emb):

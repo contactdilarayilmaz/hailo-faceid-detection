@@ -11,7 +11,7 @@ from hailo_apps.hailo_app_python.apps.detection.detection_pipeline import GStrea
 from hailo_apps.hailo_app_python.core.gstreamer.gstreamer_app import app_callback_class
 
 from basic_pipelines.detection_faceid_pipeline import FaceIDPipeline
-from basic_pipelines.reid_utils import ReIDTracker
+from basic_pipelines.utils import Tracker
 
 
 # user_app_callback_class: attaches FaceID pipeline and ReID tracker to detection app
@@ -23,16 +23,18 @@ class user_app_callback_class(app_callback_class):
         ann_candidates = int(os.environ.get("REID_ANN_CANDIDATES", "20"))
         ann_trees = int(os.environ.get("REID_ANN_TREES", "10"))
         ann_metric = os.environ.get("REID_ANN_METRIC", "angular")
-        self.tracker = ReIDTracker(
+        db_recall_limit = int(os.environ.get("REID_DB_RECALL_LIMIT", "200"))
+        self.tracker = Tracker(
             similarity_threshold=0.54,
             ema_beta=0.12,
             max_inactive_frames=300,
             max_prototypes_per_id=6,
-            db_path="/home/pi/hailo-rpi5-examples/data/reid.sqlite",
+            db_path="/home/pi/hailo-faceid-detection/hailo-rpi5-examples/data/faceid.sqlite",
             use_ann=0,
             ann_metric=ann_metric,
             ann_trees=ann_trees,
             ann_candidates=ann_candidates,
+            db_recall_limit=db_recall_limit,
         )
         self.last_fps_time = time.time()
         self.fps_frame_count = 0

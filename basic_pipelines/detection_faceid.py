@@ -19,18 +19,18 @@ class user_app_callback_class(app_callback_class):
     def __init__(self):
         super().__init__()
         self.face_pipeline = FaceIDPipeline()
-        use_ann = os.environ.get("REID_USE_ANN", "0") == "1"
+        use_ann = os.environ.get("REID_USE_ANN", "1") == "1"
         ann_candidates = int(os.environ.get("REID_ANN_CANDIDATES", "20"))
         ann_trees = int(os.environ.get("REID_ANN_TREES", "10"))
         ann_metric = os.environ.get("REID_ANN_METRIC", "angular")
         db_recall_limit = int(os.environ.get("REID_DB_RECALL_LIMIT", "200"))
         self.tracker = Tracker(
-            similarity_threshold=0.54,
+            similarity_threshold=0.55,  # Lowered further for better persistent ID matching
             ema_beta=0.12,
             max_inactive_frames=300,
             max_prototypes_per_id=6,
             db_path="/home/pi/hailo-faceid-detection/hailo-rpi5-examples/data/faceid.sqlite",
-            use_ann=0,
+            use_ann=use_ann,
             ann_metric=ann_metric,
             ann_trees=ann_trees,
             ann_candidates=ann_candidates,

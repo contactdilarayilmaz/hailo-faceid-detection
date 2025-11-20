@@ -61,9 +61,9 @@ class FaceEmbeddingModel:
         _, height, width = self.input_shape
         face_resized = cv2.resize(face_img, (width, height))
         face_rgb = cv2.cvtColor(face_resized, cv2.COLOR_BGR2RGB)
-        face_norm = (face_rgb.astype(np.float32) - 127.5) / 128.0
-        chw = np.transpose(face_norm, (2, 0, 1))[np.newaxis, ...]
-        return chw.astype(np.float32)
+        # Model expects UINT8 in NHWC format (batch, Height, Width, Channels)
+        # Add batch dimension: (112, 112, 3) -> (1, 112, 112, 3)
+        return face_rgb.astype(np.uint8)[np.newaxis, ...]
 
     def infer(self, face_img):
         if face_img is None or face_img.size == 0:
@@ -82,6 +82,7 @@ class FaceEmbeddingModel:
         norm = np.linalg.norm(embedding)
         if norm > 1e-6 and np.isfinite(norm):
             embedding = embedding / norm
+        
         return embedding
 
 
@@ -91,7 +92,7 @@ class FaceIDPipeline:
         self.model = FaceEmbeddingModel(
             "/home/pi/hailo-rpi5-examples/resources/models/hailo8/arcface_mobilefacenet.hef"
         )
-        self.min_face_crop = 900
+        self.min_face_crop = 4000
         self.debug_reports = 0
         try:
             self.debug_report_limit = int(os.environ.get("FACE_DEBUG_LIMIT", "20"))
@@ -174,10 +175,11 @@ class FaceIDPipeline:
         if width <= 0 or height <= 0:
             return None
 
-        face_height = height * 0.45
-        face_width = width * 0.55
+        # More conservative face crop: larger and more centered for better embeddings
+        face_height = height * 0.55
+        face_width = width * 0.65
         center_x = x1 + width * 0.5
-        center_y = y1 + height * 0.28
+        center_y = y1 + height * 0.25  # Slightly higher for better face centering
 
         fx1 = int(np.clip(center_x - face_width / 2.0, 0, frame_width))
         fx2 = int(np.clip(center_x + face_width / 2.0, 0, frame_width))
@@ -241,8 +243,12 @@ class FaceIDPipeline:
                 continue
 
             fx1, fy1, fx2, fy2 = face_bbox
-            if (fx2 - fx1) * (fy2 - fy1) < self.min_face_crop:
-                self._debug_skip(det_index, "face crop too small", area=(fx2 - fx1) * (fy2 - fy1))
+            face_width = fx2 - fx1
+            face_height = fy2 - fy1
+            face_area = face_width * face_height
+            # Check both area and minimum dimensions (70x70 minimum for meaningful embeddings)
+            if face_area < self.min_face_crop or face_width < 70 or face_height < 70:
+                self._debug_skip(det_index, "face crop too small", area=face_area, width=face_width, height=face_height)
                 continue
 
             face_crop = frame[fy1:fy2, fx1:fx2]
@@ -254,6 +260,11 @@ class FaceIDPipeline:
             if embedding is None:
                 self._debug_skip(det_index, "embedding failed")
                 continue
+
+            # Debug: log embedding and face crop info
+            emb_norm = np.linalg.norm(embedding)
+            emb_first5 = embedding[:5] if len(embedding) >= 5 else embedding
+            print(f"[embedding-debug] det[{det_index}] face_bbox={face_bbox} emb_norm={emb_norm:.6f} first5={emb_first5}")
 
             quality = self._estimate_quality(face_bbox, frame_area, confidence)
 

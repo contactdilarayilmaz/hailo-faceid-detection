@@ -23,4 +23,7 @@ hailort.log
 hailort.1.log
 pyhailort.log
 
+# Resources (models and videos - too large for Git)
+resources/
+
 

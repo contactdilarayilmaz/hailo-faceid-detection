@@ -21,7 +21,7 @@ python3 basic_pipelines/detection_faceid.py
 * **Asynchronous Database Operations**: Non-blocking DB writes for smooth performance
 * **Multi-stage Search Strategy**: Optimized 2-stage search for accurate ID assignment
 
-## 📋 Requirements
+## Requirements
 
 * Raspberry Pi 5
 * Hailo AI accelerator (Hailo-8)

@@ -13,7 +13,7 @@ export HAILORT_VDEVICE_GROUP_ID="1"
 python3 basic_pipelines/detection_faceid.py
 ```
 
-## ✨ Key Features
+## Key Features
 
 * **Real-time Face Recognition**: High FPS processing using Hailo AI accelerator
 * **Persistent ID Tracking**: Maintains person identities across sessions using SQLite
@@ -28,13 +28,13 @@ python3 basic_pipelines/detection_faceid.py
 * Python 3.8+
 * Hailo Runtime libraries
 
-## 🔧 Installation
+## Installation
 
 ```bash
 pip install numpy opencv-python hailo-platform annoy
 ```
 
-## ⚙️ Configuration
+## Configuration
 
 Set environment variables for customization:
 
@@ -46,7 +46,7 @@ export REID_DB_RECALL_LIMIT="200"    # Max DB entries to load
 export REID_ANN_REBUILD_INTERVAL="30" # ANN rebuild interval (frames)
 ```
 
-## 📖 Documentation
+## Documentation
 
 For complete documentation, see [DOCUMENTATION.md](DOCUMENTATION.md).
 
@@ -58,7 +58,7 @@ The documentation includes:
 * Troubleshooting guide
 * Usage examples
 
-## 🏗️ Architecture
+## Architecture
 
 ```
 GStreamer → Person Detection → FaceIDPipeline → Tracker → SQLite DB
@@ -67,7 +67,7 @@ GStreamer → Person Detection → FaceIDPipeline → Tracker → SQLite DB
                               (Embeddings)
 ```
 
-## 📁 Project Structure
+## Project Structure
 
 ```
 hailo-rpi5-examples/
@@ -80,7 +80,7 @@ hailo-rpi5-examples/
 └── DOCUMENTATION.md               # Complete documentation
 ```
 
-## 🎯 Usage Example
+## Usage Example
 
 ```python
 from basic_pipelines.detection_faceid import user_app_callback_class, app_callback
@@ -91,11 +91,11 @@ app = GStreamerDetectionApp(app_callback, user_data)
 app.run()
 ```
 
-## 🔍 Troubleshooting
+## Troubleshooting
 
 Common issues and solutions are documented in [DOCUMENTATION.md#troubleshooting](DOCUMENTATION.md#troubleshooting).
 
-## 📝 License
+## License
 
 Part of the Hailo Raspberry Pi 5 examples repository.
 

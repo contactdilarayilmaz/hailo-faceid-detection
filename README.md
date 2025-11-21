@@ -4,8 +4,6 @@ Real-time face recognition system for Raspberry Pi 5 with Hailo AI accelerator. 
 
 **Note**: The code requires Hailo SDK installed on the system to run. Import errors for `hailo_apps` during static analysis are expected and do not indicate code issues.
 
-**Optional dependency**: `annoy` package is optional. If not installed, ANN features will be disabled automatically.
-
 ## 🚀 Quick Start
 
 ```bash

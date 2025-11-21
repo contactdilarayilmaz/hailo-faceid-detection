@@ -35,6 +35,7 @@ python3 basic_pipelines/detection_faceid.py
 ## Installation
 
 ```bash
+./install.sh
 pip install numpy opencv-python hailo-platform annoy
 ```
 

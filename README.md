@@ -18,6 +18,9 @@ source .env
 export DISPLAY=0
 export PYTHONPATH=/home/pi/hailo-faceid-detection/hailo-rpi5-examples:/home/pi/hailo-apps-infra:$PYTHONPATH
 python3 basic_pipelines/detection_faceid.py --input rpi
+
+# Run the report
+python3 basic_pipelines/report.py --fps 15 --active-gap-seconds 2
 ```
 
 ## Key Features

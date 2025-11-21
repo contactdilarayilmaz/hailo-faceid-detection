@@ -11,13 +11,13 @@ from hailo_apps.hailo_app_python.apps.detection.detection_pipeline import GStrea
 from hailo_apps.hailo_app_python.core.gstreamer.gstreamer_app import app_callback_class
 
 from basic_pipelines.detection_reid_pipeline import ReIDPipeline
-from basic_pipelines.reid_utils import ReIDTracker
+from basic_pipelines.utils import Tracker
 
 class user_app_callback_class(app_callback_class):
     def __init__(self):
         super().__init__()
         self.reid = ReIDPipeline()
-        self.tracker = ReIDTracker()
+        self.tracker = Tracker()
         # FPS calculation
         self.last_fps_time = time.time()
         self.fps_frame_count = 0

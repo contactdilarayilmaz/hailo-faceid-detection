@@ -261,11 +261,6 @@ class FaceIDPipeline:
                 self._debug_skip(det_index, "embedding failed")
                 continue
 
-            # Debug: log embedding and face crop info
-            emb_norm = np.linalg.norm(embedding)
-            emb_first5 = embedding[:5] if len(embedding) >= 5 else embedding
-            print(f"[embedding-debug] det[{det_index}] face_bbox={face_bbox} emb_norm={emb_norm:.6f} first5={emb_first5}")
-
             quality = self._estimate_quality(face_bbox, frame_area, confidence)
 
             results.append(

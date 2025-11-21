@@ -56,6 +56,8 @@ class Tracker:
         self._ann_id_map = {}
         self._ann_dirty = True
         self._last_ann_rebuild_frame = 0
+        self._ann_rebuild_lock = threading.Lock()
+        self._ann_rebuild_in_progress = False
         try:
             import os
             self._ann_rebuild_interval = int(os.environ.get("REID_ANN_REBUILD_INTERVAL", "30"))
@@ -177,8 +179,10 @@ class Tracker:
         self._db_queue = None
 
     def _db_worker(self):
+        """Background thread that processes DB operations from queue."""
         if not self.db_path:
             return
+        
         upsert_sql = """
             INSERT INTO reid_entries (id, centroid, last_seen, last_seen_ts, missed_frames, total_hits, quality, created_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -191,28 +195,42 @@ class Tracker:
                 quality=excluded.quality
         """
         delete_sql = "DELETE FROM reid_entries WHERE id=?"
+        
         try:
             with sqlite3.connect(self.db_path) as conn:
                 while True:
+                    # Check if we should stop
                     if self._db_stop and self._db_stop.is_set() and self._db_queue.empty():
                         break
+                    
+                    # Get operation from queue (wait max 0.5 seconds)
                     try:
                         op, payload = self._db_queue.get(timeout=0.5)
                     except Empty:
                         continue
-                    if op == "STOP":
-                        self._db_queue.task_done()
-                        break
+                    
+                    # Process operation (task_done will be called in finally block)
                     try:
+                        # Handle STOP signal
+                        if op == "STOP":
+                            break
+                        
+                        # Execute DB operation
                         if op == "UPSERT":
                             conn.execute(upsert_sql, payload)
+                            conn.commit()
                         elif op == "DELETE":
                             conn.execute(delete_sql, (payload,))
-                        conn.commit()
+                            conn.commit()
+                        else:
+                            print(f"[tracker] Unknown DB operation: {op}")
+                            
                     except sqlite3.Error as exc:
                         print(f"[tracker] DB worker error: {exc}")
                     finally:
+                        # Always mark task as done, even if operation failed
                         self._db_queue.task_done()
+                        
         except sqlite3.Error as exc:
             print(f"[tracker] DB worker aborted: {exc}")
 
@@ -344,15 +362,34 @@ class Tracker:
             return
 
         ann.build(self.ann_trees)
-        self._ann_index = ann
-        self._ann_dim = dim
-        self._ann_id_map = id_map
-        self._ann_dirty = False
+        # Atomically update index (thread-safe)
+        with self._ann_rebuild_lock:
+            self._ann_index = ann
+            self._ann_dim = dim
+            self._ann_id_map = id_map
+            self._ann_dirty = False
+
+    def _build_ann_index_async(self):
+        """Build ANN index asynchronously in background thread (non-blocking)."""
+        if self._ann_rebuild_in_progress:
+            return
+        
+        self._ann_rebuild_in_progress = True
+        
+        def rebuild_worker():
+            try:
+                self._build_ann_index()
+            finally:
+                self._ann_rebuild_in_progress = False
+        
+        thread = threading.Thread(target=rebuild_worker, daemon=True, name="ANNRebuild")
+        thread.start()
 
     def _get_ann_candidates(self, vector, frame_idx=None):
         if not self.use_ann:
             return self.gallery + self.db_gallery
         
+        # Check if rebuild is needed
         should_rebuild = False
         if self._ann_index is None:
             should_rebuild = True
@@ -364,18 +401,43 @@ class Tracker:
             else:
                 should_rebuild = True
         
+        # Use existing index if available (thread-safe read)
+        with self._ann_rebuild_lock:
+            ann_index = self._ann_index
+            ann_id_map = self._ann_id_map
+        
+        if ann_index is not None:
+            k = max(int(self.ann_candidates), 1)
+            idxs = ann_index.get_nns_by_vector(vector, k, include_distances=False)
+            candidates = [ann_id_map.get(idx) for idx in idxs if ann_id_map.get(idx) is not None]
+            if candidates:
+                # Trigger async rebuild if needed (non-blocking)
+                if should_rebuild and not self._ann_rebuild_in_progress:
+                    self._build_ann_index_async()
+                    if frame_idx is not None:
+                        self._last_ann_rebuild_frame = frame_idx
+                return candidates
+        
+        # No index available - must rebuild synchronously (first time only)
         if should_rebuild:
             self._build_ann_index()
             if frame_idx is not None:
                 self._last_ann_rebuild_frame = frame_idx
+            
+            # Try again with new index
+            with self._ann_rebuild_lock:
+                ann_index = self._ann_index
+                ann_id_map = self._ann_id_map
+            
+            if ann_index is not None:
+                k = max(int(self.ann_candidates), 1)
+                idxs = ann_index.get_nns_by_vector(vector, k, include_distances=False)
+                candidates = [ann_id_map.get(idx) for idx in idxs if ann_id_map.get(idx) is not None]
+                if candidates:
+                    return candidates
         
-        if self._ann_index is None:
-            return self.gallery + self.db_gallery
-        
-        k = max(int(self.ann_candidates), 1)
-        idxs = self._ann_index.get_nns_by_vector(vector, k, include_distances=False)
-        candidates = [self._ann_id_map.get(idx) for idx in idxs if self._ann_id_map.get(idx) is not None]
-        return candidates or (self.gallery + self.db_gallery)
+        # Fallback to linear search
+        return self.gallery + self.db_gallery
 
     def _get_db_gallery_from_ann(self):
         """Get db_gallery entries from ANN index if available."""
@@ -490,39 +552,6 @@ class Tracker:
         self.next_id = max(self.next_id, revived_entry["id"] + 1)
         return revived_entry, best_sim
 
-    def _final_comprehensive_search(self, embedding, used_ids):
-        """Final comprehensive search before creating new ID."""
-        best_entry = None
-        best_sim = -1.0
-        
-        # Search in gallery
-        for entry in self.gallery:
-            if entry["id"] in used_ids:
-                continue
-            sim = self._similarity(embedding, entry)
-            if sim > best_sim:
-                best_sim = sim
-                best_entry = entry
-        
-        # Search in db_gallery
-        gallery_ids = {entry["id"] for entry in self.gallery}
-        db_gallery_entries = self._get_db_gallery_from_ann()
-        for entry in db_gallery_entries:
-            entry_id = entry.get("id")
-            if entry_id in gallery_ids or entry_id in used_ids:
-                continue
-            centroid = entry.get("centroid")
-            if centroid is None:
-                continue
-            sim = float(np.dot(embedding, centroid))
-            if sim > best_sim:
-                best_sim = sim
-                best_entry = entry
-        
-        final_threshold = max(self.similarity_threshold - 0.08, 0.50)
-        if best_entry is not None and best_sim >= final_threshold:
-            return best_entry, best_sim
-        return None, best_sim
 
     # ========== Main Assignment Logic ==========
 
@@ -560,26 +589,41 @@ class Tracker:
             if det_index is None or det_index >= total_detections:
                 continue
 
-            # Search in ANN candidates first
+            # Stage 1: Search in ANN candidates (fast search from gallery + db_gallery)
             candidate_entries = self._get_ann_candidates(det["embedding"], frame_idx)
             best_entry, best_sim = self._search_in_entries(det["embedding"], candidate_entries, used_ids)
             
-            # If not found, search in all gallery entries
+            # If no match in candidates, search in full gallery (fallback for better accuracy)
             if best_entry is None or best_sim < self.similarity_threshold:
                 gallery_entry, gallery_sim = self._search_in_entries(det["embedding"], self.gallery, used_ids)
                 if gallery_sim > best_sim:
                     best_entry = gallery_entry
                     best_sim = gallery_sim
 
-            # Match found in gallery
+            # Match found?
             if best_entry is not None and best_sim >= self.similarity_threshold:
-                self._update_entry(best_entry, det["embedding"], frame_idx, det.get("bbox"), det.get("quality", 1.0))
-                self._persist_entry(best_entry)
+                # Update entry in gallery
+                if best_entry["id"] in {e["id"] for e in self.gallery}:
+                    self._update_entry(best_entry, det["embedding"], frame_idx, det.get("bbox"), det.get("quality", 1.0))
+                    self._persist_entry(best_entry)
+                else:
+                    # Add revived entry from DB to gallery
+                    best_entry["last_seen"] = frame_idx
+                    best_entry["last_seen_ts"] = int(time.time())
+                    best_entry["bbox"] = det.get("bbox")
+                    best_entry["quality"] = max(best_entry.get("quality", 0.0), det.get("quality", 1.0))
+                    best_entry["missed_frames"] = 0
+                    best_entry["hits"] = best_entry.get("hits", 0) + 1
+                    self.gallery.append(best_entry)
+                    self._persist_entry(best_entry)
+                    self._ann_dirty = True
+                
                 assignment[det_index] = best_entry["id"]
                 used_ids.add(best_entry["id"])
                 continue
 
-            # Try to revive from DB
+            # Stage 2: No match found, search more broadly in db_gallery (for revive)
+            # Only search in db_gallery (gallery already searched in Stage 1)
             revived_entry, revived_sim = self._revive_from_db(det["embedding"], used_ids, frame_idx)
             if revived_entry is not None:
                 revived_entry["last_seen"] = frame_idx
@@ -593,23 +637,6 @@ class Tracker:
                 self._ann_dirty = True
                 assignment[det_index] = revived_entry["id"]
                 used_ids.add(revived_entry["id"])
-                continue
-
-            # Final comprehensive search before creating new ID
-            final_entry, final_sim = self._final_comprehensive_search(det["embedding"], used_ids)
-            if final_entry is not None:
-                final_entry["last_seen"] = frame_idx
-                final_entry["last_seen_ts"] = int(time.time())
-                final_entry["bbox"] = det.get("bbox")
-                final_entry["quality"] = max(final_entry.get("quality", 0.0), det.get("quality", 1.0))
-                final_entry["missed_frames"] = 0
-                final_entry["hits"] = final_entry.get("hits", 0) + 1
-                if final_entry["id"] not in {e["id"] for e in self.gallery}:
-                    self.gallery.append(final_entry)
-                self._persist_entry(final_entry)
-                self._ann_dirty = True
-                assignment[det_index] = final_entry["id"]
-                used_ids.add(final_entry["id"])
             else:
                 # Create new ID
                 new_entry = self._create_entry(det["embedding"], frame_idx, det.get("bbox"), det.get("quality", 1.0))

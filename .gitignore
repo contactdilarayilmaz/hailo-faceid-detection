@@ -23,7 +23,7 @@ hailort.log
 hailort.1.log
 pyhailort.log
 
-# Resources (models and videos - too large for Git)
-resources/
+# Resources (models and videos) - Now included in Git for easy setup
+# resources/
 
 

@@ -6,21 +6,45 @@ Real-time face recognition system for Raspberry Pi 5 with Hailo AI accelerator. 
 
 ## 🚀 Quick Start
 
+### Prerequisites
+- Raspberry Pi 5 with Hailo AI accelerator
+- Hailo SDK installed on the system
+- Python 3.8+
+
+### Installation
+
 ```bash
-# Set environment variables
+# Clone the repository
+git clone <your-repo-url>
+cd hailo-faceid-detection/hailo-rpi5-examples
+
+# Run installation script
+./install.sh
+
+# This will:
+# - Create virtual environment (venv_hailo_rpi_examples)
+# - Install Python dependencies
+# - Create .env file from .env.example
+```
+
+### Running the Application
+
+```bash
+# Activate virtual environment and set up environment
+source setup_env.sh
+
+# Or manually:
+source venv_hailo_rpi_examples/bin/activate
+source .env
+export PYTHONPATH=$(pwd):$PYTHONPATH
+
+# Set Hailo device environment variables
 export HAILO_DEVICE_IDS="0001:01:00.0"
 export HAILORT_VDEVICE_GROUP_ID="1"
-
-# Run the application
-cd ~/hailo-faceid-detection/hailo-rpi5-examples
-./install.sh
-source .env
 export DISPLAY=0
-export PYTHONPATH=/home/pi/hailo-faceid-detection/hailo-rpi5-examples:/home/pi/hailo-apps-infra:$PYTHONPATH
-python3 basic_pipelines/detection_faceid.py --input rpi
 
-# Run the report
-python3 basic_pipelines/report.py --fps 15 --active-gap-seconds 2
+# Run the face ID detection
+python3 -m basic_pipelines.detection_faceid --input rpi
 ```
 
 ## Key Features
@@ -40,9 +64,23 @@ python3 basic_pipelines/report.py --fps 15 --active-gap-seconds 2
 
 ## Installation
 
+The `install.sh` script handles the complete setup:
+
 ```bash
 ./install.sh
-pip install numpy opencv-python hailo-platform annoy
+```
+
+This will:
+- Create Python virtual environment (`venv_hailo_rpi_examples`)
+- Install all Python dependencies from `requirements.txt`
+- Create `.env` file from `.env.example`
+
+**Manual installation** (if needed):
+```bash
+python3 -m venv venv_hailo_rpi_examples
+source venv_hailo_rpi_examples/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
 ```
 
 ## Configuration

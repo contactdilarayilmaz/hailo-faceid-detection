@@ -15,16 +15,12 @@ Real-time face recognition system for Raspberry Pi 5 with Hailo AI accelerator. 
 
 ```bash
 # Clone the repository
-git clone <your-repo-url>
+git clone https://github.com/contactdilarayilmaz/hailo-faceid-detection.git
 cd hailo-faceid-detection/hailo-rpi5-examples
 
 # Run installation script
 ./install.sh
 
-# This will:
-# - Create virtual environment (venv_hailo_rpi_examples)
-# - Install Python dependencies
-# - Create .env file from .env.example
 ```
 
 ### Running the Application
@@ -33,18 +29,21 @@ cd hailo-faceid-detection/hailo-rpi5-examples
 # Activate virtual environment and set up environment
 source setup_env.sh
 
-# Or manually:
-source venv_hailo_rpi_examples/bin/activate
-source .env
-export PYTHONPATH=$(pwd):$PYTHONPATH
 
 # Set Hailo device environment variables
+export DISPLAY=0
 export HAILO_DEVICE_IDS="0001:01:00.0"
 export HAILORT_VDEVICE_GROUP_ID="1"
-export DISPLAY=0
+export PYTHONPATH=$(pwd):$PYTHONPATH
+
 
 # Run the face ID detection
 python3 -m basic_pipelines.detection_faceid --input rpi
+
+
+# Run the report
+python3 basic_pipelines/report.py --fps 15 --active-gap-seconds 2
+
 ```
 
 ## Key Features
@@ -59,29 +58,18 @@ python3 -m basic_pipelines.detection_faceid --input rpi
 
 * Raspberry Pi 5
 * Hailo AI accelerator (Hailo-8)
+* RPI Camera Module 3
 * Python 3.8+
 * Hailo Runtime libraries
 
 ## Installation
 
-The `install.sh` script handles the complete setup:
-
 ```bash
 ./install.sh
+pip install numpy opencv-python hailo-platform annoy
+pip install pysqlite3
 ```
 
-This will:
-- Create Python virtual environment (`venv_hailo_rpi_examples`)
-- Install all Python dependencies from `requirements.txt`
-- Create `.env` file from `.env.example`
-
-**Manual installation** (if needed):
-```bash
-python3 -m venv venv_hailo_rpi_examples
-source venv_hailo_rpi_examples/bin/activate
-pip install -r requirements.txt
-cp .env.example .env
-```
 
 ## Configuration
 
